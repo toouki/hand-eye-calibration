@@ -56,7 +56,7 @@ def func():
 
     images_num = [f for f in os.listdir(images_path) if f.endswith('.jpg')]
 
-    for i in range(1, len(images_num) + 1):   #标定好的图片在images_path路径下，从0.jpg到x.jpg
+    for i in range(0, len(images_num)):   #标定好的图片在images_path路径下，从0.jpg到x.jpg
 
         image_file = os.path.join(images_path,f"{i}.jpg")
 
