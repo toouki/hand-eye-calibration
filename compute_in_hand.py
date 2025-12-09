@@ -24,10 +24,6 @@ logger_ = logging.getLogger(__name__)
 logger_ = CommonLog(logger_)
 
 
-current_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),"eye_hand_data")
-
-images_path = os.path.join("eye_hand_data",find_latest_data_folder(current_path))
-file_path = os.path.join(images_path,"poses.txt")  #采集标定板图片时对应的机械臂末端的位姿 从 第一行到最后一行 需要和采集的标定板的图片顺序进行对应
 
 
 with open("config.yaml", 'r', encoding='utf-8') as file:
@@ -38,7 +34,7 @@ YY = data.get("checkerboard_args").get("YY") #标定板的中宽度对应的角�
 L = data.get("checkerboard_args").get("L")   #标定板一格的长度  单位为米
 
 
-def func():
+def in_hand_calib(image_path, file_path):
 
     path = os.path.dirname(__file__)
 
@@ -109,8 +105,12 @@ def func():
 
 if __name__ == '__main__':
 
+    current_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),"eye_hand_data")
+    images_path = os.path.join("eye_hand_data",find_latest_data_folder(current_path))
+    file_path = os.path.join(images_path,"poses.txt")  #采集标定板图片时对应的机械臂末端的位姿 从 第一行到最后一行 需要和采集的标定板的图片顺序进行对应
+
     # 旋转矩阵
-    rotation_matrix, translation_vector = func()
+    rotation_matrix, translation_vector = in_hand_calib(images_path, file_path)
 
     # 将旋转矩阵转换为四元数
     rotation = R.from_matrix(rotation_matrix)

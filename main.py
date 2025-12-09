@@ -6,6 +6,8 @@ from datetime import datetime
 from scipy.spatial.transform import Rotation as R
 import sys
 import threading
+import subprocess
+import shutil
 
 class HandEyeCalibrationCLI:
     def __init__(self):
@@ -117,17 +119,17 @@ class HandEyeCalibrationCLI:
                     # 亚像素优化并绘制角点（绿色）
                     corners2 = cv2.cornerSubPix(gray, corners, (5, 5), (-1, -1), self.criteria)
                     cv2.drawChessboardCorners(display_frame, (self.XX, self.YY), corners2, ret_corners)
-                    cv2.putText(display_frame, "✅ 检测到棋盘格", (10, 30), 
+                    cv2.putText(display_frame, "✅ Find Chessboard", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)  # 绿色
                 else:
                     # 未检测到棋盘格（红色）
-                    cv2.putText(display_frame, "❌ 未检测到棋盘格", (10, 30), 
+                    cv2.putText(display_frame, "❌ Not Find Chessboard", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)  # 红色
                 
                 # 显示状态信息
                 cv2.putText(display_frame, status_text, (10, 70), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.putText(display_frame, "命令行操作: s=采集 | q=退出", (10, 100), 
+                cv2.putText(display_frame, "命令行: s=采集 | i=眼在手上 | o=眼在手外 | q=退出", (10, 100), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
                 # 显示画面
@@ -149,6 +151,8 @@ class HandEyeCalibrationCLI:
         print("操作说明:")
         print("  在命令行中输入以下指令并回车：")
         print("  - 's' 或 'S' : 采集当前帧和机械臂位姿（需先检测到棋盘格）")
+        print("  - 'i' 或 'I' : 眼在手上标定计算（相机相对于机械臂末端）")
+        print("  - 'o' 或 'O' : 眼在手外标定计算（相机相对于机械臂基座）")
         print("  - 'q' 或 'Q' : 退出程序")
         print("  - 直接回车 : 刷新检测状态，不执行操作")
         print("=" * 60)
@@ -163,7 +167,7 @@ class HandEyeCalibrationCLI:
         while self.running:
             try:
                 # 命令行输入操作指令
-                user_input = input("\n请输入操作指令 (s=采集, q=退出): ").strip()
+                user_input = input("\n请输入操作指令 (s=采集, i=眼在手上计算, o=眼在手外计算, q=退出): ").strip()
                 
                 if user_input.lower() == 'q':
                     # 退出程序
@@ -183,6 +187,14 @@ class HandEyeCalibrationCLI:
                         print("❌ 错误: 未检测到棋盘格，无法采集数据")
                         print("  请调整摄像头位置或标定板角度后重试")
                 
+                elif user_input.lower() == 'i':
+                    # 眼在手上计算
+                    self.compute_in_hand()
+                
+                elif user_input.lower() == 'o':
+                    # 眼在手外计算
+                    self.compute_to_hand()
+                
                 elif user_input == '':
                     # 直接回车，刷新检测状态
                     status = "✅ 已检测到" if self.detected_chessboard else "❌ 未检测到"
@@ -191,7 +203,7 @@ class HandEyeCalibrationCLI:
                 else:
                     # 无效输入
                     print(f"❌ 无效指令: '{user_input}'")
-                    print("  请输入 's' 采集或 'q' 退出")
+                    print("  请输入 's' 采集, 'i' 眼在手上计算, 'o' 眼在手外计算, 或 'q' 退出")
             
             except KeyboardInterrupt:
                 print("\n\n程序被用户中断")
@@ -261,6 +273,154 @@ class HandEyeCalibrationCLI:
             except ValueError as e:
                 print(f"❌ 输入错误: {str(e)}")
                 print("请重新输入，或输入 'cancel' 取消")
+    
+    def compute_in_hand(self):
+        """眼在手上标定计算"""
+        try:
+            print("\n🔧 开始眼在手上标定计算...")
+            print("计算相机相对于机械臂末端的位姿")
+            print("=" * 60)
+            
+            # 检查数据目录是否存在
+            current_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eye_hand_data")
+            if not os.path.exists(current_path):
+                print("❌ 错误: 未找到 eye_hand_data 目录")
+                print("  请先采集数据再进行计算")
+                return
+            
+            # 查找最新的数据文件夹
+            from libs.auxiliary import find_latest_data_folder
+            latest_folder = find_latest_data_folder(current_path)
+            if not latest_folder:
+                print("❌ 错误: 未找到有效的数据文件夹")
+                print("  请先采集数据再进行计算")
+                return
+            
+            data_path = os.path.join(current_path, latest_folder)
+            images_path = data_path
+            file_path = os.path.join(data_path, "poses.txt")
+            
+            # 检查必要文件
+            if not os.path.exists(file_path):
+                print(f"❌ 错误: 未找到位姿文件 {file_path}")
+                return
+            
+            # 检查图片数量
+            images = [f for f in os.listdir(images_path) if f.endswith('.jpg')]
+            if len(images) == 0:
+                print("❌ 错误: 未找到图片文件")
+                return
+            
+            print(f"📁 使用数据目录: {latest_folder}")
+            print(f"📸 找到 {len(images)} 张图片")
+            print(f"📄 位姿文件: {os.path.basename(file_path)}")
+            print("=" * 60)
+            
+            # 运行计算
+            import compute_in_hand
+            rotation_matrix, translation_vector = compute_in_hand.in_hand_calib(images_path, file_path)
+            
+            # 转换为四元数
+            rotation = R.from_matrix(rotation_matrix)
+            quaternion = rotation.as_quat()
+            x, y, z = translation_vector.flatten()
+            
+            print("=" * 60)
+            print("✅ 眼在手上标定计算完成！")
+            print("=" * 60)
+            print(f"旋转矩阵:\n{rotation_matrix}")
+            print(f"\n平移向量 (m): [{x:.6f}, {y:.6f}, {z:.6f}]")
+            print(f"\n四元数 (x,y,z,w): [{quaternion[0]:.6f}, {quaternion[1]:.6f}, {quaternion[2]:.6f}, {quaternion[3]:.6f}]")
+            
+            # 保存结果
+            result_file = os.path.join(data_path, "eye_in_hand_result.txt")
+            with open(result_file, 'w', encoding='utf-8') as f:
+                f.write("眼在手上标定结果\n")
+                f.write("=" * 40 + "\n")
+                f.write(f"旋转矩阵:\n{rotation_matrix}\n\n")
+                f.write(f"平移向量 (m): [{x:.6f}, {y:.6f}, {z:.6f}]\n\n")
+                f.write(f"四元数 (x,y,z,w): [{quaternion[0]:.6f}, {quaternion[1]:.6f}, {quaternion[2]:.6f}, {quaternion[3]:.6f}]\n")
+            
+            print(f"\n💾 结果已保存到: {result_file}")
+            
+        except Exception as e:
+            print(f"❌ 计算过程中出现错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def compute_to_hand(self):
+        """眼在手外标定计算"""
+        try:
+            print("\n🔧 开始眼在手外标定计算...")
+            print("计算相机相对于机械臂基座的位姿")
+            print("=" * 60)
+            
+            # 检查数据目录是否存在
+            current_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eye_hand_data")
+            if not os.path.exists(current_path):
+                print("❌ 错误: 未找到 eye_hand_data 目录")
+                print("  请先采集数据再进行计算")
+                return
+            
+            # 查找最新的数据文件夹
+            from libs.auxiliary import find_latest_data_folder
+            latest_folder = find_latest_data_folder(current_path)
+            if not latest_folder:
+                print("❌ 错误: 未找到有效的数据文件夹")
+                print("  请先采集数据再进行计算")
+                return
+            
+            data_path = os.path.join(current_path, latest_folder)
+            images_path = data_path
+            file_path = os.path.join(data_path, "poses.txt")
+            
+            # 检查必要文件
+            if not os.path.exists(file_path):
+                print(f"❌ 错误: 未找到位姿文件 {file_path}")
+                return
+            
+            # 检查图片数量
+            images = [f for f in os.listdir(images_path) if f.endswith('.jpg')]
+            if len(images) == 0:
+                print("❌ 错误: 未找到图片文件")
+                return
+            
+            print(f"📁 使用数据目录: {latest_folder}")
+            print(f"📸 找到 {len(images)} 张图片")
+            print(f"📄 位姿文件: {os.path.basename(file_path)}")
+            print("=" * 60)
+            
+            # 运行计算
+            import compute_to_hand
+            rotation_matrix, translation_vector = compute_to_hand.to_hand_calib(images_path, file_path)
+            
+            # 转换为四元数
+            rotation = R.from_matrix(rotation_matrix)
+            quaternion = rotation.as_quat()
+            x, y, z = translation_vector.flatten()
+            
+            print("=" * 60)
+            print("✅ 眼在手外标定计算完成！")
+            print("=" * 60)
+            print(f"旋转矩阵:\n{rotation_matrix}")
+            print(f"\n平移向量 (m): [{x:.6f}, {y:.6f}, {z:.6f}]")
+            print(f"\n四元数 (x,y,z,w): [{quaternion[0]:.6f}, {quaternion[1]:.6f}, {quaternion[2]:.6f}, {quaternion[3]:.6f}]")
+            
+            # 保存结果
+            result_file = os.path.join(data_path, "eye_to_hand_result.txt")
+            with open(result_file, 'w', encoding='utf-8') as f:
+                f.write("眼在手外标定结果\n")
+                f.write("=" * 40 + "\n")
+                f.write(f"旋转矩阵:\n{rotation_matrix}\n\n")
+                f.write(f"平移向量 (m): [{x:.6f}, {y:.6f}, {z:.6f}]\n\n")
+                f.write(f"四元数 (x,y,z,w): [{quaternion[0]:.6f}, {quaternion[1]:.6f}, {quaternion[2]:.6f}, {quaternion[3]:.6f}]\n")
+            
+            print(f"\n💾 结果已保存到: {result_file}")
+            
+        except Exception as e:
+            print(f"❌ 计算过程中出现错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     try:
